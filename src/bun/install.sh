@@ -1,66 +1,58 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
-platform=$(uname -ms)
+# shellcheck source=/dev/null
+source /etc/os-release
 
-if [[ ${OS:-} = Windows_NT ]]; then
-  if [[ $platform != MINGW64* ]]; then
-    powershell -c "irm bun.sh/install.ps1|iex"
-    exit $?
-  fi
+# Clean up
+cleanup() {
+  case "${ID}" in
+  debian | ubuntu)
+    rm -rf /var/lib/apt/lists/*
+    ;;
+  esac
+}
+
+cleanup
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo -e 'Script must be run as root. Use sudo, su, or add "USER root" to your Dockerfile before running this script.'
+  exit 1
 fi
 
-# Reset
-Color_Off=''
-
-# Regular Colors
-Red=''
-Green=''
-Dim='' # White
-
-# Bold
-Bold_White=''
-Bold_Green=''
-
-if [[ -t 1 ]]; then
-    # Reset
-    Color_Off='\033[0m' # Text Reset
-
-    # Regular Colors
-    Red='\033[0;31m'   # Red
-    Green='\033[0;32m' # Green
-    Dim='\033[0;2m'    # White
-
-    # Bold
-    Bold_Green='\033[1;32m' # Bold Green
-    Bold_White='\033[1m'    # Bold White
-fi
-
-error() {
-    echo -e "${Red}error${Color_Off}:" "$@" >&2
-    exit 1
+apt_get_update() {
+  case "${ID}" in
+  debian | ubuntu)
+    if [ "$(find /var/lib/apt/lists/* | wc -l)" = "0" ]; then
+      echo "Running apt-get update..."
+      apt-get update -y
+    fi
+    ;;
+  esac
 }
 
-info() {
-    echo -e "${Dim}$@ ${Color_Off}"
+# Checks if packages are installed and installs them if not
+check_packages() {
+  case "${ID}" in
+  debian | ubuntu)
+    if ! dpkg -s "$@" >/dev/null 2>&1; then
+      apt_get_update
+      apt-get -y install --no-install-recommends "$@"
+    fi
+    ;;
+  alpine)
+    if ! apk -e info "$@" >/dev/null 2>&1; then
+      apk add --no-cache "$@"
+    fi
+    ;;
+  esac
 }
 
-info_bold() {
-    echo -e "${Bold_White}$@ ${Color_Off}"
-}
+check_packages curl ca-certificates unzip
 
-success() {
-    echo -e "${Green}$@ ${Color_Off}"
-}
-
-command -v unzip >/dev/null ||
-    error 'unzip is required to install bun'
-
-if [[ $# -gt 2 ]]; then
-    error 'Too many arguments, only 2 are allowed. The first can be a specific tag of bun to install. (e.g. "bun-v0.1.4") The second can be a build variant of bun to install. (e.g. "debug-info")'
-fi
-
-case $platform in
+# Most of this is from https://bun.sh/install
+case $(uname -ms) in
 'Darwin x86_64')
     target=darwin-x64
     ;;
@@ -70,19 +62,8 @@ case $platform in
 'Linux aarch64' | 'Linux arm64')
     target=linux-aarch64
     ;;
-'MINGW64'*)
-    target=windows-x64
-    ;;
 'Linux x86_64' | *)
     target=linux-x64
-    ;;
-esac
-
-case "$target" in
-'linux'*)
-    if [ -f /etc/alpine-release ]; then
-        target="$target-musl"
-    fi
     ;;
 esac
 
@@ -91,7 +72,7 @@ if [[ $target = darwin-x64 ]]; then
     # redirect stderr to devnull to avoid error message when not running in Rosetta
     if [[ $(sysctl -n sysctl.proc_translated 2>/dev/null) = 1 ]]; then
         target=darwin-aarch64
-        info "Your shell is running in Rosetta 2. Downloading bun for $target instead"
+        echo "Your shell is running in Rosetta 2. Downloading bun for $target instead"
     fi
 fi
 
@@ -99,27 +80,26 @@ GITHUB=${GITHUB-"https://github.com"}
 
 github_repo="$GITHUB/oven-sh/bun"
 
-# If AVX2 isn't supported, use the -baseline build
-case "$target" in
-'darwin-x64'*)
+if [[ $target = darwin-x64 ]]; then
+    # If AVX2 isn't supported, use the -baseline build
     if [[ $(sysctl -a | grep machdep.cpu | grep AVX2) == '' ]]; then
-        target="$target-baseline"
+        target=darwin-x64-baseline
     fi
-    ;;
-'linux-x64'*)
+fi
+
+if [[ $target = linux-x64 ]]; then
     # If AVX2 isn't supported, use the -baseline build
     if [[ $(cat /proc/cpuinfo | grep avx2) = '' ]]; then
-        target="$target-baseline"
+        target=linux-x64-baseline
     fi
-    ;;
-esac
+fi
 
 exe_name=bun
 
 if [[ $# = 2 && $2 = debug-info ]]; then
     target=$target-profile
     exe_name=bun-profile
-    info "You requested a debug build of bun. More information will be shown if a crash occurs."
+    echo "You requested a debug build of bun. More information will be shown if a crash occurs."
 fi
 
 if [[ $# = 0 ]]; then
@@ -131,26 +111,26 @@ fi
 install_env=BUN_INSTALL
 bin_env=\$$install_env/bin
 
-install_dir=${!install_env:-$HOME/.bun}
+install_dir="/usr/local"
 bin_dir=$install_dir/bin
 exe=$bin_dir/bun
 
 if [[ ! -d $bin_dir ]]; then
     mkdir -p "$bin_dir" ||
-        error "Failed to create install directory \"$bin_dir\""
+        echo "Failed to create install directory \"$bin_dir\""
 fi
 
 curl --fail --location --progress-bar --output "$exe.zip" "$bun_uri" ||
-    error "Failed to download bun from \"$bun_uri\""
+    echo "Failed to download bun from \"$bun_uri\""
 
 unzip -oqd "$bin_dir" "$exe.zip" ||
-    error 'Failed to extract bun'
+    echo 'Failed to extract bun'
 
 mv "$bin_dir/bun-$target/$exe_name" "$exe" ||
-    error 'Failed to move extracted bun to destination'
+    echo 'Failed to move extracted bun to destination'
 
 chmod +x "$exe" ||
-    error 'Failed to set permissions on bun executable'
+    echo 'Failed to set permissions on bun executable'
 
 rm -r "$bin_dir/bun-$target" "$exe.zip"
 
@@ -164,7 +144,7 @@ tildify() {
     fi
 }
 
-success "bun was installed successfully to $Bold_Green$(tildify "$exe")"
+echo "bun was installed successfully to $(tildify "$exe")"
 
 if command -v bun >/dev/null; then
     # Install completions, but we don't care if it fails
@@ -207,14 +187,14 @@ fish)
             done
         } >>"$fish_config"
 
-        info "Added \"$tilde_bin_dir\" to \$PATH in \"$tilde_fish_config\""
+        echo "Added \"$tilde_bin_dir\" to \$PATH in \"$tilde_fish_config\""
 
         refresh_command="source $tilde_fish_config"
     else
         echo "Manually add the directory to $tilde_fish_config (or similar):"
 
         for command in "${commands[@]}"; do
-            info_bold "  $command"
+            echo "  $command"
         done
     fi
     ;;
@@ -239,14 +219,14 @@ zsh)
             done
         } >>"$zsh_config"
 
-        info "Added \"$tilde_bin_dir\" to \$PATH in \"$tilde_zsh_config\""
+        echo "Added \"$tilde_bin_dir\" to \$PATH in \"$tilde_zsh_config\""
 
         refresh_command="exec $SHELL"
     else
         echo "Manually add the directory to $tilde_zsh_config (or similar):"
 
         for command in "${commands[@]}"; do
-            info_bold "  $command"
+            echo "  $command"
         done
     fi
     ;;
@@ -256,7 +236,7 @@ bash)
 
     commands=(
         "export $install_env=$quoted_install_dir"
-        "export PATH=\"$bin_env:\$PATH\""
+        "export PATH=$bin_env:\$PATH"
     )
 
     bash_configs=(
@@ -286,7 +266,7 @@ bash)
                 done
             } >>"$bash_config"
 
-            info "Added \"$tilde_bin_dir\" to \$PATH in \"$tilde_bash_config\""
+            echo "Added \"$tilde_bin_dir\" to \$PATH in \"$tilde_bash_config\""
 
             refresh_command="source $bash_config"
             set_manually=false
@@ -298,23 +278,17 @@ bash)
         echo "Manually add the directory to $tilde_bash_config (or similar):"
 
         for command in "${commands[@]}"; do
-            info_bold "  $command"
+            echo "  $command"
         done
     fi
     ;;
 *)
     echo 'Manually add the directory to ~/.bashrc (or similar):'
-    info_bold "  export $install_env=$quoted_install_dir"
-    info_bold "  export PATH=\"$bin_env:\$PATH\""
+    echo "  export $install_env=$quoted_install_dir"
+    echo "  export PATH=\"$bin_env:\$PATH\""
     ;;
 esac
 
-echo
-info "To get started, run:"
-echo
+cleanup
 
-if [[ $refresh_command ]]; then
-    info_bold "  $refresh_command"
-fi
-
-info_bold "  bun --help"
+echo "Done!"
