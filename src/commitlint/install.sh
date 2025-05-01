@@ -22,7 +22,7 @@ mkdir -p $hooks_dir
 # Create commit-msg hook
 cat > $hooks_dir/commit-msg <<EOL
 #!/bin/sh
-npx --no -- commitlint --edit "\$1"
+npx --no -- commitlint --config "${_REMOTE_USER_HOME}/commitlint.config.js" --edit "$1"
 EOL
 
 # Make the hook executable
