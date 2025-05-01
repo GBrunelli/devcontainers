@@ -1,0 +1,9 @@
+{
+    "name": "bun",
+    "id": "bun",
+    "version": "1.0.0",
+    "description": "Installs bun, a fast all-in-one JavaScript runtime.",
+    "installsAfter": [
+        "ghcr.io/devcontainers/features/common-utils"
+    ]
+}
