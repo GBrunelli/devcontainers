@@ -1,0 +1,9 @@
+{
+    "name": "commitlint",
+    "id": "commitlint",
+    "version": "1.0.0",
+    "description": "Sets up a Git hook for conventional commit message validation",
+    "installsAfter": [
+        "ghcr.io/devcontainers/features/git"
+    ]
+}
